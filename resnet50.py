@@ -1,3 +1,6 @@
+import os
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 from fastai.vision.all import *
 from fastai.callback.all import *
 from fastai.metrics import *
@@ -7,11 +10,15 @@ from sklearn.metrics import *
 import matplotlib.pyplot as plt
 import pandas as pd
 import torchvision.models as models
+import torch
+
+# Step 0: Device setup
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print(f"Using device: {device}")
 
 # Step 1: Define the path to your dataset
 path = Path('/Users/tanishta/Desktop/College/dm_proj/Indian Medicinal Leaves Image Datasets/Medicinal Leaf dataset')
 
-# Check if the path exists
 if not path.exists():
     print(f"Error: The path {path} does not exist.")
 else:
@@ -24,13 +31,18 @@ if failed:
     for f in failed:
         f.unlink()
 
-# Step 2: Create the DataLoaders with transformations
+# Patched normalization to force stats on the correct device
+def patched_normalize(mean, std):
+    return Normalize.from_stats(torch.tensor(mean).to(device), torch.tensor(std).to(device))
+
+# Step 2: Create the DataLoaders
 dls = ImageDataLoaders.from_folder(
     path,
     valid_pct=0.2,
-    item_tfms=Resize(460),
-    batch_tfms=aug_transforms(size=224),
-    num_workers=0  # helps debug on macOS
+    seed=42,
+    item_tfms=Resize(224),
+    batch_tfms=[patched_normalize(*imagenet_stats)],
+    bs=32
 )
 
 print(f'Training data size: {len(dls.train_ds)}')
@@ -38,6 +50,9 @@ print(f'Validation data size: {len(dls.valid_ds)}')
 
 # Step 3: Create the learner with ResNet-50
 learn = cnn_learner(dls, models.resnet50, metrics=accuracy)
+
+# Move model to MPS/CPU
+learn.model.to(device)
 
 # Step 4: Define SaveModelCallback
 class SaveModelCallback(Callback):
@@ -58,6 +73,7 @@ learn.export('/Users/tanishta/Desktop/College/dm_proj/ResNet50Final.pkl')
 
 # Step 7: Load and test on a sample image
 learn = load_learner('/Users/tanishta/Desktop/College/dm_proj/ResNet50Final.pkl')
+learn.model.to(device)
 
 test_image_path = '/Users/tanishta/Desktop/College/dm_proj/Test Images/sample.jpg'
 img = PILImage.create(test_image_path)
